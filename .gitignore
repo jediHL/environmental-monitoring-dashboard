@@ -1,0 +1,7 @@
+.idea/
+cmake-build-*/
+build/
+out/
+.vs/
+.DS_Store
+CMakeUserPresets.json
