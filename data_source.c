@@ -21,20 +21,14 @@ static bool workerDone;
 
 #define MAX_RESPONSE_SIZE 65536
 
-/* Coordinates of Carlow town, Ireland. Times returned in Europe/Dublin. */
-static const char *weatherUrl =
-    "https://api.open-meteo.com/v1/forecast?"
-    "latitude=52.84083&longitude=-6.92611&"
-    "current=temperature_2m,relative_humidity_2m&"
-    "timezone=Europe%2FDublin&forecast_days=1";
-
-static const char *airUrl =
-    "https://air-quality-api.open-meteo.com/v1/air-quality?"
-    "latitude=52.84083&longitude=-6.92611&current=pm2_5&"
-    "timezone=Europe%2FDublin&forecast_days=1";
-
 static bool workerActive;
 static EnvironmentData workerResult;
+/* A snapshot taken before thread creation, never changed during a request. */
+static struct {
+    int locationId;
+    double latitude;
+    double longitude;
+} workerRequest;
 
 #ifndef _WIN32
 typedef struct {
@@ -66,9 +60,9 @@ static char *GetJson(const char *url, char *error, size_t errorSize)
 
 #ifdef _WIN32
     /* WinHTTP is part of Windows; no separate curl installation is needed. */
-    wchar_t wideUrl[512];
+    wchar_t wideUrl[2048];
     wchar_t host[128];
-    wchar_t path[512];
+    wchar_t path[2048];
     URL_COMPONENTS parts = {0};
     HINTERNET session = NULL;
     HINTERNET connection = NULL;
@@ -84,10 +78,10 @@ static char *GetJson(const char *url, char *error, size_t errorSize)
     parts.lpszUrlPath = path;
     parts.dwUrlPathLength = (DWORD)(sizeof(path) / sizeof(path[0]));
 
-    if (!MultiByteToWideChar(CP_UTF8, 0, url, -1, wideUrl, 512) ||
+    if (!MultiByteToWideChar(CP_UTF8, 0, url, -1, wideUrl, 2048) ||
         !WinHttpCrackUrl(wideUrl, 0, 0, &parts)) goto cleanup;
 
-    session = WinHttpOpen(L"CarlowDashboard/0.1",
+    session = WinHttpOpen(L"IrelandWeatherDashboard/0.2",
                          WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                          WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) goto cleanup;
@@ -143,7 +137,7 @@ cleanup:
     }
     ResponseBuffer buffer = {text, 0};
     curl_easy_setopt(request, CURLOPT_URL, url);
-    curl_easy_setopt(request, CURLOPT_USERAGENT, "CarlowDashboard/0.1");
+    curl_easy_setopt(request, CURLOPT_USERAGENT, "IrelandWeatherDashboard/0.2");
     curl_easy_setopt(request, CURLOPT_CONNECTTIMEOUT, 4L);
     curl_easy_setopt(request, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(request, CURLOPT_NOSIGNAL, 1L);
@@ -186,25 +180,39 @@ static bool ReadTime(const cJSON *object, char *time, size_t capacity)
     return true;
 }
 
-void FetchEnvironmentData(EnvironmentData *result)
+void FetchEnvironmentData(int locationId, double latitude, double longitude,
+                          EnvironmentData *result)
 {
     memset(result, 0, sizeof(*result));
+    result->locationId = locationId;
+    if (locationId < 0 || !isfinite(latitude) || !isfinite(longitude) ||
+        latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        snprintf(result->weatherError, sizeof(result->weatherError), "Invalid location");
+        snprintf(result->forecastError, sizeof(result->forecastError), "Invalid location");
+        snprintf(result->airError, sizeof(result->airError), "Invalid location");
+        return;
+    }
+    char weatherUrl[1024];
+    char airUrl[512];
+    snprintf(weatherUrl, sizeof(weatherUrl),
+        "https://api.open-meteo.com/v1/forecast?latitude=%.5f&longitude=%.5f&"
+        "current=temperature_2m,relative_humidity_2m,apparent_temperature,"
+        "weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,"
+        "temperature_2m_min,precipitation_probability_max,precipitation_sum,"
+        "wind_speed_10m_max&forecast_days=7&wind_speed_unit=kmh&timezone=Europe%%2FDublin",
+        latitude, longitude);
+    snprintf(airUrl, sizeof(airUrl),
+        "https://air-quality-api.open-meteo.com/v1/air-quality?"
+        "latitude=%.5f&longitude=%.5f&current=pm2_5&"
+        "timezone=Europe%%2FDublin&forecast_days=1", latitude, longitude);
     char *text = GetJson(weatherUrl, result->weatherError,
                          sizeof(result->weatherError));
     if (text) {
-        cJSON *root = cJSON_Parse(text);
-        const cJSON *current = cJSON_GetObjectItemCaseSensitive(root, "current");
-        result->weatherValid =
-            ReadNumber(current, "temperature_2m", &result->temperature) &&
-            ReadNumber(current, "relative_humidity_2m", &result->humidity) &&
-            result->humidity >= 0.0 && result->humidity <= 100.0 &&
-            ReadTime(current, result->weatherTime, sizeof(result->weatherTime));
-        if (!result->weatherValid) {
-            snprintf(result->weatherError, sizeof(result->weatherError),
-                     "Missing or invalid weather data");
-        }
-        cJSON_Delete(root);
+        ParseWeatherJson(text, result);
         free(text);
+    } else {
+        snprintf(result->forecastError, sizeof(result->forecastError),
+                 "%s", result->weatherError);
     }
 
     text = GetJson(airUrl, result->airError, sizeof(result->airError));
@@ -227,14 +235,16 @@ void FetchEnvironmentData(EnvironmentData *result)
 static DWORD WINAPI RefreshWorker(LPVOID unused)
 {
     (void)unused;
-    FetchEnvironmentData(&workerResult);
+    FetchEnvironmentData(workerRequest.locationId, workerRequest.latitude,
+                         workerRequest.longitude, &workerResult);
     return 0;
 }
 #else
 static void *RefreshWorker(void *unused)
 {
     (void)unused;
-    FetchEnvironmentData(&workerResult);
+    FetchEnvironmentData(workerRequest.locationId, workerRequest.latitude,
+                         workerRequest.longitude, &workerResult);
     pthread_mutex_lock(&workerMutex);
     workerDone = true;
     pthread_mutex_unlock(&workerMutex);
@@ -251,9 +261,13 @@ bool DataSourceInit(void)
 #endif
 }
 
-bool StartDataRefresh(void)
+bool StartDataRefresh(int locationId, double latitude, double longitude)
 {
-    if (workerActive) return false;
+    if (workerActive || locationId < 0 || !isfinite(latitude) || !isfinite(longitude) ||
+        latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return false;
+    workerRequest.locationId = locationId;
+    workerRequest.latitude = latitude;
+    workerRequest.longitude = longitude;
 #ifdef _WIN32
     worker = CreateThread(NULL, 0, RefreshWorker, NULL, 0, NULL);
     if (!worker) return false;

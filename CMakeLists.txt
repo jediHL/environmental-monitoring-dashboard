@@ -31,7 +31,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cjson)
 
-add_library(data_source STATIC data_source.c)
+add_library(data_source STATIC data_source.c forecast.c)
 target_include_directories(data_source PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
                            PRIVATE ${cjson_SOURCE_DIR})
 target_link_libraries(data_source PRIVATE cjson)
@@ -44,9 +44,23 @@ else()
     target_link_libraries(data_source PRIVATE CURL::libcurl Threads::Threads)
 endif()
 
-add_executable(dashboard main.c)
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(test_core tests/test_core.c counties.c)
+    target_include_directories(test_core PRIVATE ${cjson_SOURCE_DIR})
+    target_link_libraries(test_core PRIVATE data_source cjson)
+    add_test(NAME forecast_catalogue_cache_refresh COMMAND test_core)
+    add_test(NAME county_map_hit_testing COMMAND dashboard --check-map
+             "${CMAKE_CURRENT_SOURCE_DIR}/assets/maps/ireland_counties.json")
+endif()
 
-target_link_libraries(dashboard PRIVATE raylib data_source)
+add_executable(dashboard main.c counties.c ireland_map.c)
+target_include_directories(dashboard PRIVATE ${cjson_SOURCE_DIR})
+
+target_link_libraries(dashboard PRIVATE raylib data_source cjson)
+if(NOT MSVC)
+    target_link_libraries(dashboard PRIVATE m)
+endif()
 
 # Package the font next to the executable for both CLion and Visual Studio.
 add_custom_command(TARGET dashboard POST_BUILD
