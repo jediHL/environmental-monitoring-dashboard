@@ -197,7 +197,7 @@ void FetchEnvironmentData(int locationId, double latitude, double longitude,
     snprintf(weatherUrl, sizeof(weatherUrl),
         "https://api.open-meteo.com/v1/forecast?latitude=%.5f&longitude=%.5f&"
         "current=temperature_2m,relative_humidity_2m,apparent_temperature,"
-        "weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,"
+        "weather_code,is_day,wind_speed_10m&daily=weather_code,temperature_2m_max,"
         "temperature_2m_min,precipitation_probability_max,precipitation_sum,"
         "wind_speed_10m_max&forecast_days=7&wind_speed_unit=kmh&timezone=Europe%%2FDublin",
         latitude, longitude);

@@ -5,3 +5,5 @@ out/
 .vs/
 .DS_Store
 CMakeUserPresets.json
+user_data/
+/exports/

@@ -42,7 +42,7 @@ static bool Date(const char *value)
     return day >= 1 && day <= maximum;
 }
 
-static bool Timestamp(const char *value)
+bool IsDataTimestamp(const char *value)
 {
     if (!value || strlen(value) != 16 || !Date(value) || value[10] != 'T' || value[13] != ':') return false;
     for (int i = 11; i < 16; i++) {
@@ -58,6 +58,8 @@ bool ParseWeatherJson(const char *text, EnvironmentData *result)
     result->weatherValid = false;
     result->forecastValid = false;
     result->dayCount = 0;
+    result->daylightValid = false;
+    result->isDay = false;
     cJSON *root = cJSON_Parse(text);
     const cJSON *current = cJSON_GetObjectItemCaseSensitive(root, "current");
     const cJSON *time = cJSON_GetObjectItemCaseSensitive(current, "time");
@@ -69,9 +71,12 @@ bool ParseWeatherJson(const char *text, EnvironmentData *result)
         Number(current, "wind_speed_10m", &result->wind) &&
         Number(current, "weather_code", &code) && Code(code) &&
         result->humidity >= 0 && result->humidity <= 100 && result->wind >= 0 &&
-        cJSON_IsString(time) && Timestamp(time->valuestring);
+        cJSON_IsString(time) && IsDataTimestamp(time->valuestring);
     if (result->weatherValid) {
         result->weatherCode = (int)code;
+        double daylight = 0;
+        result->daylightValid = Number(current, "is_day", &daylight) && (daylight == 0 || daylight == 1);
+        result->isDay = result->daylightValid && daylight == 1;
         snprintf(result->weatherTime, sizeof(result->weatherTime), "%s", time->valuestring);
         result->weatherTime[10] = ' ';
         result->weatherError[0] = '\0';
@@ -126,6 +131,8 @@ bool MergeEnvironmentData(EnvironmentData *cached, const EnvironmentData *incomi
         cached->apparentTemperature = incoming->apparentTemperature;
         cached->wind = incoming->wind;
         cached->weatherCode = incoming->weatherCode;
+        cached->isDay = incoming->isDay;
+        cached->daylightValid = incoming->daylightValid;
         cached->weatherValid = true;
         snprintf(cached->weatherTime, sizeof(cached->weatherTime), "%s", incoming->weatherTime);
     }

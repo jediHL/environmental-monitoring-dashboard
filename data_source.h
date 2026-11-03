@@ -23,6 +23,8 @@ typedef struct {
     double wind;
     int weatherCode;
     double pm25;
+    bool isDay;
+    bool daylightValid;
     bool weatherValid;
     bool airValid;
     bool forecastValid;
@@ -44,6 +46,7 @@ void DataSourceClose(void);
 
 /* Shared parsing and merging also allow deterministic offline tests. */
 bool ParseWeatherJson(const char *text, EnvironmentData *result);
+bool IsDataTimestamp(const char *text);
 bool MergeEnvironmentData(EnvironmentData *cached, const EnvironmentData *incoming);
 const char *WeatherDescription(int code);
 

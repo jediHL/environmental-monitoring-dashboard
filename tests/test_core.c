@@ -13,7 +13,7 @@ static int failures;
 /* Synthetic fixture: deterministic test input, never shown by the application. */
 static const char *validJson =
     "{\"current\":{\"time\":\"2026-10-24T12:15\",\"temperature_2m\":12.5,"
-    "\"relative_humidity_2m\":70,\"apparent_temperature\":10.2,\"wind_speed_10m\":15,\"weather_code\":3},"
+    "\"relative_humidity_2m\":70,\"apparent_temperature\":10.2,\"wind_speed_10m\":15,\"weather_code\":3,\"is_day\":1},"
     "\"daily\":{\"time\":[\"2026-10-24\",\"2026-10-25\",\"2026-10-26\",\"2026-10-27\",\"2026-10-28\",\"2026-10-29\",\"2026-10-30\"],"
     "\"temperature_2m_min\":[5,6,7,8,9,10,11],\"temperature_2m_max\":[12,13,14,15,16,17,18],"
     "\"precipitation_probability_max\":[0,10,20,30,40,50,100],\"precipitation_sum\":[0,1,2,3,4,5,6],"
@@ -66,12 +66,22 @@ static void Parsing(void)
     CHECK(strcmp(data.weatherTime, "2026-10-24 12:15") == 0);
     CHECK(data.days[6].rainProbability == 100 && data.days[0].rainProbability == 0);
     CHECK(data.days[6].weatherCode == 95);
+    CHECK(data.daylightValid && data.isDay);
     CHECK(!ParseWeatherJson("not json", &data));
     CHECK(!data.weatherValid && !data.forecastValid && data.dayCount == 0);
     CHECK(!ParseWeatherJson("{\"current\":null,\"daily\":null}", &data));
 
     cJSON *root = cJSON_Parse(validJson);
     cJSON *current = cJSON_GetObjectItemCaseSensitive(root, "current");
+    cJSON_ReplaceItemInObjectCaseSensitive(current, "is_day", cJSON_CreateNumber(0));
+    data = Parse(root); CHECK(data.weatherValid && data.daylightValid && !data.isDay);
+    cJSON_ReplaceItemInObjectCaseSensitive(current, "is_day", cJSON_CreateNumber(2));
+    data = Parse(root); CHECK(data.weatherValid && !data.daylightValid);
+    cJSON_ReplaceItemInObjectCaseSensitive(current, "is_day", cJSON_CreateNull());
+    data = Parse(root); CHECK(data.weatherValid && !data.daylightValid);
+    cJSON_DeleteItemFromObjectCaseSensitive(current, "is_day");
+    data = Parse(root); CHECK(data.weatherValid && !data.daylightValid);
+    cJSON_AddNumberToObject(current, "is_day", 1);
     cJSON_ReplaceItemInObjectCaseSensitive(current, "temperature_2m", cJSON_CreateNull());
     data = Parse(root);
     CHECK(!data.weatherValid && data.forecastValid);
@@ -116,10 +126,12 @@ static void Cache(void)
     incoming.locationId = 5;
     CHECK(MergeEnvironmentData(&cached, &incoming));
     CHECK(cached.weatherValid && cached.forecastValid && cached.temperature == 12.5);
+    CHECK(cached.daylightValid && cached.isDay);
     incoming = (EnvironmentData){.locationId = 5};
     snprintf(incoming.weatherError, sizeof(incoming.weatherError), "HTTP error 503");
     CHECK(MergeEnvironmentData(&cached, &incoming));
     CHECK(cached.temperature == 12.5 && cached.dayCount == 7 && cached.days[6].high == 18);
+    CHECK(cached.daylightValid && cached.isDay); /* A failed update keeps the original day/night state. */
     CHECK(strcmp(cached.weatherError, "HTTP error 503") == 0);
     CHECK(!cached.airValid);
 }
